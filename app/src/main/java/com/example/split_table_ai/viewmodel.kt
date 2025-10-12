@@ -102,23 +102,36 @@ class MainViewModel : ViewModel() {
         exportMessagesToCsv(context, _processedMessages.value, originalFileUri)
     }
 
+    private val _orderedHeaders = MutableStateFlow<List<String>>(emptyList())
+    val orderedHeaders: StateFlow<List<String>> = _orderedHeaders
+
+    fun setOrderedHeaders(headers: List<String>) {
+        _orderedHeaders.value = headers
+    }
+
     fun exportMessagesToCsv(context: Context, messages: List<MessageData>, uri: Uri?) {
         if (messages.isEmpty() || uri == null) {
             Toast.makeText(context, "No export location available.", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val allHeaders = messages.flatMap { it.data.keys }.toSet().toList()
+        // Use the stored ordered headers. Fall back to all keys if not set.
+        val finalHeaders = if (_orderedHeaders.value.isNotEmpty()) {
+            _orderedHeaders.value
+        } else {
+            messages.flatMap { it.data.keys }.toSet().toList()
+        }
 
         try {
-            val outputStream = context.contentResolver.openOutputStream(uri, "wt") // "wt" = write & truncate
+            val outputStream = context.contentResolver.openOutputStream(uri, "wt")
             val writer = OutputStreamWriter(outputStream ?: throw IOException("Unable to open output stream"))
             val csvWriter = CSVWriter(writer)
 
-            csvWriter.writeNext(allHeaders.toTypedArray())
+            csvWriter.writeNext(finalHeaders.toTypedArray())
 
             messages.forEach { message ->
-                val row = allHeaders.map { header -> message.data[header] ?: "" }.toTypedArray()
+                // Use finalHeaders here to ensure the order is correct
+                val row = finalHeaders.map { header -> message.data[header] ?: "" }.toTypedArray()
                 csvWriter.writeNext(row)
             }
 
@@ -132,24 +145,32 @@ class MainViewModel : ViewModel() {
         }
     }
 
+
     fun parseCsvFile(context: Context, uri: Uri): List<MessageData> {
-        val inputStream = context.contentResolver.openInputStream(uri) ?: return emptyList()
-        val reader = CSVReader(InputStreamReader(inputStream))
-        val rows = reader.readAll()
+        val messages = mutableListOf<MessageData>()
+        try {
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return emptyList()
+            val reader = CSVReader(InputStreamReader(inputStream))
 
-        if (rows.isEmpty()) return emptyList()
+            val headers = reader.readNext()?.map { it.trim() } ?: return emptyList()
 
-        val headers = rows[0].map { it.trim() } // First row as header
-
-        return rows.drop(1).mapNotNull { row ->
-            if (row.size != headers.size) return@mapNotNull null
-
-            val rowMap = headers.zip(row).associate { (key, value) ->
-                key to value.trim()
-            }.toMutableMap()
-
-            MessageData(data = rowMap)
+            var nextLine: Array<String>?
+            while (reader.readNext().also { nextLine = it } != null) {
+                nextLine?.let { row ->
+                    if (row.size == headers.size) {
+                        val rowMap = headers.zip(row).associate { (key, value) ->
+                            key to value.trim()
+                        }.toMutableMap()
+                        messages.add(MessageData(data = rowMap))
+                    }
+                }
+            }
+            reader.close()
+        } catch (e: Exception) {
+            Log.e("CSVParse", "Error parsing CSV", e)
+            // Optionally show a toast to the user
         }
+        return messages
     }
 
 
@@ -248,7 +269,7 @@ class MainViewModel : ViewModel() {
         }
     }
     fun processDetectedEntitiesAndExtendTable(messages: List<MessageData>): List<MessageData> {
-        // Step 1: Collect original columns from first message
+        // Collect original columns from first message
         val detectedTypes = mutableMapOf<String, Boolean>()
 
         messages.forEach { message ->
