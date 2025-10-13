@@ -53,7 +53,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
 
 import com.google.mlkit.nl.entityextraction.Entity
 import com.google.mlkit.nl.entityextraction.EntityExtraction
@@ -68,6 +72,11 @@ import java.io.InputStreamReader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.graphics.graphicsLayer
 
 data class MessageData(
     val data: MutableMap<String, String> = mutableMapOf(),
@@ -146,8 +155,9 @@ class MainActivity : ComponentActivity() {
                                 searchMatches = searchMatches,
                                 currentMatch = currentMatch,
                                 listState = listState,
-                                rowSelectionMode = isRowSelectMode
-                            )
+                                rowSelectionMode = isRowSelectMode,
+                                onHeadersReordered = viewModel::setOrderedHeaders
+                                )
                         }
 
                         if (showSearchDrawer) {
@@ -344,9 +354,6 @@ fun AppTopBarMenu(
     )
 }
 
-
-
-
 @Composable
 fun EntityExtractTable(
     messages: List<MessageData>,
@@ -356,125 +363,184 @@ fun EntityExtractTable(
     searchMatches: List<Pair<Int, String>> = emptyList(),
     currentMatch: Pair<Int, String>? = null,
     listState: LazyListState,
-    rowSelectionMode: Boolean
+    rowSelectionMode: Boolean,
+    onHeadersReordered: (List<String>) -> Unit
 ) {
-    LaunchedEffect(currentMatch) {
-        currentMatch?.let { (rowIndex, _) ->
-            listState.animateScrollToItem(rowIndex)
-        }
-    }
-
     if (messages.isEmpty()) return
 
-    val headers = messages.first().data.keys.toList()
+    val headers = remember { mutableStateListOf<String>().apply { addAll(messages.first().data.keys) } }
+
     val columnChecked = remember { mutableStateMapOf<String, Boolean>() }
     val columnWidths = remember { mutableStateMapOf<String, MutableState<Dp>>() }
     val expandedCell = remember { mutableStateOf<Pair<Int, String>?>(null) }
-    val verticalScroll = rememberScrollState()
-    val horizontalScroll = rememberScrollState()
+    val horizontalScrollState = rememberScrollState()
     val focusManager = LocalFocusManager.current
 
-    LaunchedEffect(headers) {
+    var draggingColumn by remember { mutableStateOf<String?>(null) }
+    var dragOffset by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(messages.first().data.keys) {
+        val newHeaders = messages.first().data.keys
+        val currentHeaders = headers.toList()
+        headers.clear()
+        headers.addAll(
+            currentHeaders.filter { it in newHeaders } + newHeaders.filter { it !in currentHeaders }
+        )
+
         headers.forEach { header ->
             if (columnChecked[header] == null) columnChecked[header] = false
-            if (columnWidths[header] == null) columnWidths[header] = mutableStateOf(140.dp)
+            if (columnWidths[header] == null) columnWidths[header] = mutableStateOf(150.dp)
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
+    LaunchedEffect(currentMatch) {
+        currentMatch?.let { (rowIndex, _) ->
+            listState.animateScrollToItem(index = rowIndex, scrollOffset = -200)
+        }
+    }
+
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // --- HEADER ROW ---
+        Row(
             modifier = Modifier
-                .verticalScroll(verticalScroll)
-                .horizontalScroll(horizontalScroll)
-                .padding(8.dp)
+                .horizontalScroll(horizontalScrollState)
+                .padding(bottom = 2.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Header Row
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (rowSelectionMode) {
-                    Box(
-                        modifier = Modifier
-                            .width(40.dp)
-                            .height(56.dp)
-                            .border(1.dp, Color.Black),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("Sel", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                }
-
-                headers.forEach { header ->
-                    val width = columnWidths[header]?.value ?: 140.dp
-                    Box(
-                        modifier = Modifier
-                            .width(width)
-                            .height(56.dp)
-                            .border(1.dp, Color.Black)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(start = 4.dp)
-                            ) {
-                                Checkbox(
-                                    checked = columnChecked[header] ?: false,
-                                    onCheckedChange = {
-                                        columnChecked[header] = it
-                                        onExtractClicked(
-                                            columnChecked.filter { it.value }.map { it.key }
-                                        )
-                                    },
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = header,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .width(8.dp)
-                                    .fillMaxHeight()
-                                    .pointerInput(header) {
-                                        detectHorizontalDragGestures { _, dragAmount ->
-                                            val current = columnWidths[header]?.value ?: 140.dp
-                                            val newWidth = (current + dragAmount.dp).coerceIn(80.dp, 1200.dp)
-                                            columnWidths[header]?.value = newWidth
-                                        }
-                                    }
-                                    .background(Color.Gray)
-                            )
-                        }
-                    }
+            if (rowSelectionMode) {
+                Box(
+                    modifier = Modifier.width(40.dp).height(56.dp).border(1.dp, Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Sel", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
 
-            // Data Rows
-            messages.forEachIndexed { rowIndex, message ->
+            headers.forEach { header ->
+                val width = columnWidths[header]?.value ?: 150.dp
+
+                val dragModifier = Modifier.pointerInput(header) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = {
+                            draggingColumn = header
+                        },
+                        onDragEnd = {
+                            draggingColumn = null
+                            dragOffset = 0f
+                        },
+                        onDragCancel = {
+                            draggingColumn = null
+                            dragOffset = 0f
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            dragOffset += dragAmount.x
+
+                            val currentIndex = headers.indexOf(draggingColumn)
+                            if (currentIndex == -1) return@detectDragGesturesAfterLongPress
+
+                            val movedBy = (dragOffset / width.toPx()).toInt()
+
+                            if (movedBy != 0) {
+                                val newIndex = (currentIndex + movedBy).coerceIn(0, headers.size - 1)
+                                if (currentIndex != newIndex) {
+                                    // --- THE FIX IS HERE ---
+                                    // Replace headers.move(...) with removeAt and add
+                                    val item = headers.removeAt(currentIndex)
+                                    headers.add(newIndex, item)
+                                    dragOffset = 0f
+
+                                    onHeadersReordered(headers.toList())
+                                }
+                            }
+                        }
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .width(width)
+                        .height(56.dp)
+                        .then(if (header == draggingColumn) {
+                            dragModifier
+                                .zIndex(1f)
+                                .graphicsLayer(translationX = dragOffset)
+                        } else {
+                            dragModifier
+                        })
+                        .border(1.dp, if (header == draggingColumn) Color.Red else Color.Black)
+                        .padding(horizontal = 4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = columnChecked[header] ?: false,
+                                onCheckedChange = {
+                                    columnChecked[header] = it
+                                    onExtractClicked(
+                                        columnChecked.filter { entry -> entry.value }.map { it.key }
+                                    )
+                                },
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = header,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .width(10.dp)
+                                .fillMaxHeight()
+                                .pointerInput(header) {
+                                    detectHorizontalDragGestures { _, dragAmount ->
+                                        val current = columnWidths[header]?.value ?: 150.dp
+                                        val newWidth = (current + dragAmount.dp).coerceIn(80.dp, 1200.dp)
+                                        columnWidths[header]?.value = newWidth
+                                    }
+                                }
+                        )
+                    }
+                }
+            }
+        }
+
+        // --- DATA ROWS (LazyColumn for performance) ---
+        LazyColumn(state = listState) {
+            itemsIndexed(
+                items = messages,
+                key = { index, _ -> index }
+            ) { rowIndex, message ->
                 val isSelected = selectedIndices.contains(rowIndex)
                 val rowBgColor = if (isSelected) Color(0xFFBBDEFB) else Color.Transparent
+                val rowHorizontalScrollState = rememberScrollState()
+
+                LaunchedEffect(horizontalScrollState.value) {
+                    rowHorizontalScrollState.scrollTo(horizontalScrollState.value)
+                }
 
                 Row(
                     modifier = Modifier
                         .background(rowBgColor)
-                        .padding(vertical = 1.dp)
+                        .horizontalScroll(rowHorizontalScrollState, enabled = false)
                         .fillMaxWidth(),
-
                 ) {
                     if (rowSelectionMode) {
                         Box(
-                            modifier = Modifier
-                                .width(40.dp)
-                                .height(56.dp)
-                                .border(1.dp, Color.LightGray),
+                            modifier = Modifier.width(40.dp).heightIn(min = 56.dp).border(1.dp, Color.LightGray),
                             contentAlignment = Alignment.Center
                         ) {
                             Checkbox(
@@ -489,16 +555,15 @@ fun EntityExtractTable(
                     }
 
                     headers.forEach { header ->
-                        val width = columnWidths[header]?.value ?: 140.dp
+                        val width = columnWidths[header]?.value ?: 150.dp
                         val value = message.data[header] ?: ""
-
-                        val isMatch = searchMatches.contains(rowIndex to header)
-                        val isCurrent = currentMatch == (rowIndex to header)
                         val isExpanded = expandedCell.value == rowIndex to header
+                        val isCurrent = currentMatch == (rowIndex to header)
+                        val isMatch = searchMatches.any { it == rowIndex to header }
 
                         val cellBg = when {
-                            isCurrent -> Color.Yellow.copy(alpha = 0.4f)
-                            isMatch -> Color.Cyan.copy(alpha = 0.2f)
+                            isCurrent -> Color.Yellow.copy(alpha = 0.5f)
+                            isMatch -> Color.Cyan.copy(alpha = 0.3f)
                             else -> Color.Transparent
                         }
 
@@ -508,25 +573,21 @@ fun EntityExtractTable(
                             .background(cellBg)
                             .clickable {
                                 focusManager.clearFocus(force = true)
-                                expandedCell.value =
-                                    if (isExpanded) null else rowIndex to header
+                                expandedCell.value = if (isExpanded) null else rowIndex to header
                             }
                             .padding(8.dp)
+                            .heightIn(min = 56.dp)
 
                         Box(
-                            modifier = if (isExpanded) {
-                                cellModifier.wrapContentHeight()
-                            } else {
-                                cellModifier.height(56.dp)
-                            },
-                            contentAlignment = Alignment.TopStart
+                            modifier = if (isExpanded) cellModifier.wrapContentHeight() else cellModifier,
+                            contentAlignment = Alignment.CenterStart
                         ) {
                             SelectionContainer {
                                 Text(
                                     text = value,
                                     style = LocalTextStyle.current.copy(fontSize = 12.sp),
-                                    maxLines = if (isExpanded) Int.MAX_VALUE else 1,
-                                    overflow = if (isExpanded) TextOverflow.Clip else TextOverflow.Ellipsis
+                                    maxLines = if (isExpanded) Int.MAX_VALUE else 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }

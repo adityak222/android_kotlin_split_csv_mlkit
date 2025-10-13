@@ -2,7 +2,11 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/android_kotlin_split_csv_mlkit.iml" filepath="$PROJECT_DIR$/.idea/android_kotlin_split_csv_mlkit.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/split_table_ai.iml" filepath="$PROJECT_DIR$/.idea/modules/split_table_ai.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.iml" filepath="$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.androidTest.iml" filepath="$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.androidTest.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.main.iml" filepath="$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.unitTest.iml" filepath="$PROJECT_DIR$/.idea/modules/app/split_table_ai.app.unitTest.iml" />
     </modules>
   </component>
 </project>
