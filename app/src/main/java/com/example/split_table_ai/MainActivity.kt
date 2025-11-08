@@ -75,6 +75,8 @@ import java.util.Locale
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.graphicsLayer
 
@@ -136,7 +138,9 @@ class MainActivity : ComponentActivity() {
                             isDeleteRowEnabled = selectedRows.isNotEmpty(),
                             isDeleteColumnEnabled = selectedColumns.isNotEmpty(),
                             isRowSelectMode = isRowSelectMode,
-                            onToggleRowSelectMode = { isRowSelectMode = !isRowSelectMode }
+                            onToggleRowSelectMode = { isRowSelectMode = !isRowSelectMode},
+                                usePollinations = viewModel.usePollinations.collectAsState().value,
+                                onToggleUsePollinations = { viewModel.setUsePollinations(it) }
 
                         )
                     }
@@ -269,7 +273,9 @@ fun AppTopBarMenu(
     isDeleteRowEnabled: Boolean,
     isDeleteColumnEnabled: Boolean,
     isRowSelectMode: Boolean,
-    onToggleRowSelectMode: () -> Unit
+    onToggleRowSelectMode: () -> Unit,
+    usePollinations: Boolean,                    // NEW
+    onToggleUsePollinations: (Boolean) -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -279,7 +285,24 @@ fun AppTopBarMenu(
             containerColor = MaterialTheme.colorScheme.primary
         ),
         actions = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(end = 8.dp)
+            ) {
+                Text(
+                    text = "Pollinations",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(end = 6.dp)
+                )
+                Switch(
+                    checked = usePollinations,
+                    onCheckedChange = onToggleUsePollinations
+                )
+            }
             Box {
+                IconButton(onClick = onAddFileClick) { Icon(Icons.Default.Add, contentDescription = "Add") }
+                IconButton(onClick = onExtractClick) { Icon(Icons.Default.PlayArrow, contentDescription = "Extract") }
+
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(Icons.Default.MoreVert, contentDescription = "Menu")
                 }

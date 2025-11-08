@@ -36,6 +36,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.example.split_table_ai.PollinationsApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+
 
 class MainViewModel : ViewModel() {
 
@@ -203,48 +209,72 @@ class MainViewModel : ViewModel() {
                     originalMessage.data[header] ?: ""
                 }.replace("-", " ")
 
-                val params = EntityExtractionParams.Builder(combinedText).build()
-
-                extractor.annotate(params)
-                    .addOnSuccessListener { annotations ->
-                        val entities: List<Pair<String, String>> = annotations.flatMap { annotation ->
-                            annotation.entities.mapNotNull { entity ->
-                                val text = annotation.annotatedText
-
-                                val type: String? = when (entity.type) {
-                                    Entity.TYPE_ADDRESS -> "Address"
-                                    Entity.TYPE_DATE_TIME -> {
-                                        val resolved = resolveDateTimeText(text)
-                                        return@mapNotNull "Date-Time" to resolved
-                                    }
-                                    Entity.TYPE_EMAIL -> "Email"
-                                    Entity.TYPE_PHONE -> {
-                                        if (text.replace(" ", "").length < 10 || !isLikelyPhone(text)) return@mapNotNull null
-                                        "Phone"
-                                    }
-                                    Entity.TYPE_PAYMENT_CARD -> "Card"
-                                    Entity.TYPE_TRACKING_NUMBER -> "Tracking"
-                                    Entity.TYPE_URL -> "URL"
-                                    Entity.TYPE_MONEY -> "Money"
-                                    Entity.TYPE_FLIGHT_NUMBER -> "Flight"
-                                    Entity.TYPE_IBAN -> "IBAN"
-                                    Entity.TYPE_ISBN -> "ISBN-13"
-                                    else -> null
-                                }
-
-                                type?.let { typeName -> typeName to text }
-                            }
+                // 🔀 Check if Pollinations mode is ON
+                if (_usePollinations.value) {
+                    // 🧠 Pollinations flow
+                    val pollResult = try {
+                        kotlinx.coroutines.runBlocking {
+                            callPollinationsForText(combinedText)
                         }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        ""
+                    }
 
-                        updatedMessages.add(originalMessage.copy(detectedEntities = entities))
-                        index++
-                        next()
+                    val entities: List<Pair<String, String>> = if (pollResult.isNotBlank()) {
+                        listOf("Pollinations" to pollResult)
+                    } else {
+                        emptyList()
                     }
-                    .addOnFailureListener {
-                        updatedMessages.add(originalMessage.copy(detectedEntities = emptyList()))
-                        index++
-                        next()
-                    }
+
+                    updatedMessages.add(originalMessage.copy(detectedEntities = entities))
+                    index++
+                    next()
+                } else {
+                    // 🤖 Existing ML Kit flow
+                    val params = EntityExtractionParams.Builder(combinedText).build()
+
+                    extractor.annotate(params)
+                        .addOnSuccessListener { annotations ->
+                            val entities: List<Pair<String, String>> = annotations.flatMap { annotation ->
+                                annotation.entities.mapNotNull { entity ->
+                                    val text = annotation.annotatedText
+
+                                    val type: String? = when (entity.type) {
+                                        Entity.TYPE_ADDRESS -> "Address"
+                                        Entity.TYPE_DATE_TIME -> {
+                                            val resolved = resolveDateTimeText(text)
+                                            return@mapNotNull "Date-Time" to resolved
+                                        }
+                                        Entity.TYPE_EMAIL -> "Email"
+                                        Entity.TYPE_PHONE -> {
+                                            if (text.replace(" ", "").length < 10 || !isLikelyPhone(text)) return@mapNotNull null
+                                            "Phone"
+                                        }
+                                        Entity.TYPE_PAYMENT_CARD -> "Card"
+                                        Entity.TYPE_TRACKING_NUMBER -> "Tracking"
+                                        Entity.TYPE_URL -> "URL"
+                                        Entity.TYPE_MONEY -> "Money"
+                                        Entity.TYPE_FLIGHT_NUMBER -> "Flight"
+                                        Entity.TYPE_IBAN -> "IBAN"
+                                        Entity.TYPE_ISBN -> "ISBN-13"
+                                        else -> null
+                                    }
+
+                                    type?.let { typeName -> typeName to text }
+                                }
+                            }
+
+                            updatedMessages.add(originalMessage.copy(detectedEntities = entities))
+                            index++
+                            next()
+                        }
+                        .addOnFailureListener {
+                            updatedMessages.add(originalMessage.copy(detectedEntities = emptyList()))
+                            index++
+                            next()
+                        }
+                }
             }
 
             next()
@@ -252,6 +282,7 @@ class MainViewModel : ViewModel() {
             onComplete(messages) // If model download fails
         }
     }
+
 
     fun isLikelyPhone(text: String): Boolean {
         val phoneRegex = Regex("""\+?[0-9][0-9\-\(\)\s]{7,}""") // More than 7 digits
@@ -368,7 +399,7 @@ class MainViewModel : ViewModel() {
 
 
     fun replaceCurrentMatch(replacement: String) {
-        if (replacement.isEmpty()) return  // ✅ Skip empty replacements
+        if (replacement.isEmpty()) return  // Skip empty replacements
 
         val match = currentMatch ?: return
         val (rowIndex, columnKey) = match
@@ -395,6 +426,47 @@ class MainViewModel : ViewModel() {
         _currentMatchIndex.value = 0
         currentSearchText = ""
     }
+
+    // whether to use Pollinations instead of ML Kit
+    private val _usePollinations = MutableStateFlow(false)
+    val usePollinations: StateFlow<Boolean> = _usePollinations
+
+    private val pollinationsApi by lazy { PollinationsApi.create() }
+
+    // call to change it from UI
+    fun setUsePollinations(value: Boolean) {
+        _usePollinations.value = value
+    }
+
+
+    // Make a safe network call to Pollinations; returns the raw string (or empty on failure)
+    private suspend fun callPollinationsForText(prompt: String): String = withContext(Dispatchers.IO) {
+        try {
+            val encoded = PollinationsApi.encodePrompt(prompt)
+            val resp = pollinationsApi.generateText(encoded, json = true)
+            if (resp.isSuccessful) {
+                // response body might be a JSON like {"text": "...."} OR a raw string.
+                val body = resp.body() ?: ""
+                // simple parsing: try to extract "text" field if JSON
+                val trimmed = body.trim()
+                if (trimmed.startsWith("{") && trimmed.contains("\"text\"")) {
+                    val regex = """"text"\s*:\s*"(.+?)"""".toRegex(RegexOption.DOT_MATCHES_ALL)
+                    val match = regex.find(trimmed)
+                    if (match != null) {
+                        return@withContext match.groupValues[1].replace("\\n", "\n").replace("\\\"", "\"")
+                    }
+                }
+                // fallback: return the raw body
+                return@withContext body
+            } else {
+                return@withContext ""
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return@withContext ""
+        }
+    }
+
 
 
 
