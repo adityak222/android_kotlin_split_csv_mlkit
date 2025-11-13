@@ -37,9 +37,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+
+
 
 class MainViewModel : ViewModel() {
 
+    private val jsonParser = Json { ignoreUnknownKeys = true }
     private val _rawMessages = MutableStateFlow<List<MessageData>>(emptyList())
     val rawMessages: StateFlow<List<MessageData>> = _rawMessages
 
@@ -59,6 +66,7 @@ class MainViewModel : ViewModel() {
 
 
     private var originalFileUri: Uri? = null
+
 
     fun loadCsv(context: Context, uri: Uri) {
         val parsed = parseCsvFile(context, uri)
@@ -405,6 +413,8 @@ class MainViewModel : ViewModel() {
 
     // ... inside MainViewModel class
 
+    // Replace the entire function with this one
+
     fun extractWithPollination(userPrompt: String) {
         if (_selectedColumns.value.isEmpty()) return
 
@@ -424,7 +434,6 @@ class MainViewModel : ViewModel() {
                 }
 
                 val updatedMessages = _processedMessages.value.toMutableList()
-                val newColumnName = "AI Prompt: ${userPrompt.take(20)}..."
 
                 // 2. Process each row
                 rowsToProcess.forEach { messageData ->
@@ -438,26 +447,55 @@ class MainViewModel : ViewModel() {
                     }
 
                     // 4. Create the full prompt and append the required JSON instruction
+                    // --- MODIFICATION: Make prompt stricter ---
                     val fullPrompt = """
                     User Prompt: "$userPrompt"
                     Data: [$dataForPrompt]
                     
-                    Respond in JSON format.
-                """.trimIndent()
+                    Respond ONLY with a flat, single-level JSON object.
+                    Example: {"key1": "value1", "key2": "value2"}
+                    """.trimIndent()
 
                     // 5. Call the API (GET version). URL-encode the prompt.
                     val encoded = URLEncoder.encode(fullPrompt, "UTF-8")
                     val responseText = PollinationApiClient.api.generateText(prompt = encoded).string()
 
 
-                    // 6. Update the message data with the returned text
-                    val updatedData = messageData.data.toMutableMap()
-                    updatedData[newColumnName] = responseText.trim()
+                    // --- MODIFICATION: Parse JSON and add multiple columns ---
+                    try {
+                        // 6. Parse the JSON response
+                        val parsedJson = jsonParser.decodeFromString<Map<String, JsonElement>>(responseText)
+                        val updatedData = messageData.data.toMutableMap()
 
-                    updatedMessages[originalIndex] = messageData.copy(data = updatedData)
+                        // 7. Iterate through parsed JSON and add/update columns
+                        parsedJson.forEach { (key, jsonElement) ->
+                            // Add "AI:" prefix to avoid collisions and identify AI-generated columns
+                            val newColumnName = "AI: $key"
+
+                            // Convert any JsonElement to a simple string
+                            val value = when {
+                                jsonElement is JsonPrimitive -> jsonElement.content
+                                else -> jsonElement.toString() // Fallback for nested objects/arrays
+                            }
+
+                            updatedData[newColumnName] = value
+                        }
+
+                        updatedMessages[originalIndex] = messageData.copy(data = updatedData)
+
+                    } catch (e: Exception) {
+                        // Fallback if AI response is not valid JSON
+                        Log.e("PollinationParse", "Failed to parse AI JSON response: $responseText", e)
+                        val updatedData = messageData.data.toMutableMap()
+                        // Use a different column name to indicate failure
+                        val failedColumnName = "AI Prompt (Failed): ${userPrompt.take(20)}..."
+                        updatedData[failedColumnName] = responseText.trim()
+                        updatedMessages[originalIndex] = messageData.copy(data = updatedData)
+                    }
+                    // --- END MODIFICATION ---
                 }
 
-                // 7. Update UI state
+                // 8. Update UI state
                 _processedMessages.value = updatedMessages
 
                 // Clear row selection after processing
