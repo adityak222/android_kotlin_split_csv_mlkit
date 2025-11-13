@@ -32,6 +32,7 @@ import java.io.FileWriter
 import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -51,7 +52,11 @@ class MainViewModel : ViewModel() {
     private val _isExtracting = MutableStateFlow(false)
     val isExtracting: StateFlow<Boolean> = _isExtracting
 
+    private val _isPollinationLoading = MutableStateFlow(false)
+    val isPollinationLoading: StateFlow<Boolean> = _isPollinationLoading
+
     private var loadedFileName: String? = null
+
 
     private var originalFileUri: Uri? = null
 
@@ -394,6 +399,77 @@ class MainViewModel : ViewModel() {
         _searchMatches.value = emptyList()
         _currentMatchIndex.value = 0
         currentSearchText = ""
+    }
+
+
+
+    // ... inside MainViewModel class
+
+    fun extractWithPollination(userPrompt: String) {
+        if (_selectedColumns.value.isEmpty()) return
+
+        _isPollinationLoading.value = true
+
+        viewModelScope.launch {
+            try {
+                // 1. Get all selected rows (or use all if none selected)
+                val selectedRows = _processedMessages.value.filterIndexed { index, _ ->
+                    _selectedRowIndices.value.contains(index)
+                }
+
+                val rowsToProcess = if (selectedRows.isEmpty()) {
+                    _processedMessages.value
+                } else {
+                    selectedRows
+                }
+
+                val updatedMessages = _processedMessages.value.toMutableList()
+                val newColumnName = "AI Prompt: ${userPrompt.take(20)}..."
+
+                // 2. Process each row
+                rowsToProcess.forEach { messageData ->
+                    // Find the original index of the message to update it
+                    val originalIndex = updatedMessages.indexOfFirst { it === messageData }
+                    if (originalIndex == -1) return@forEach
+
+                    // 3. Combine selected columns into text for the prompt
+                    val dataForPrompt = _selectedColumns.value.joinToString(", ") { column ->
+                        "$column: ${messageData.data[column] ?: ""}"
+                    }
+
+                    // 4. Create the full prompt and append the required JSON instruction
+                    val fullPrompt = """
+                    User Prompt: "$userPrompt"
+                    Data: [$dataForPrompt]
+                    
+                    Respond in JSON format.
+                """.trimIndent()
+
+                    // 5. Call the API (GET version). URL-encode the prompt.
+                    val encoded = URLEncoder.encode(fullPrompt, "UTF-8")
+                    val responseText = PollinationApiClient.api.generateText(prompt = encoded).string()
+
+
+                    // 6. Update the message data with the returned text
+                    val updatedData = messageData.data.toMutableMap()
+                    updatedData[newColumnName] = responseText.trim()
+
+                    updatedMessages[originalIndex] = messageData.copy(data = updatedData)
+                }
+
+                // 7. Update UI state
+                _processedMessages.value = updatedMessages
+
+                // Clear row selection after processing
+                clearRowSelection()
+
+            } catch (e: Exception) {
+                Log.e("PollinationAI", "Failed to extract with Pollination (Ask Gemini)", e)
+                // Consider exposing a one-shot UI event to show a Toast/message to user
+            } finally {
+                _isPollinationLoading.value = false
+            }
+        }
     }
 
 
