@@ -24,6 +24,8 @@ import com.google.mlkit.nl.entityextraction.EntityExtractionParams
 import com.google.mlkit.nl.entityextraction.EntityExtractorOptions
 import com.opencsv.CSVReader
 import com.opencsv.CSVWriter
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -32,13 +34,21 @@ import java.io.FileWriter
 import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+
+
 
 class MainViewModel : ViewModel() {
 
+    private val jsonParser = Json { ignoreUnknownKeys = true }
     private val _rawMessages = MutableStateFlow<List<MessageData>>(emptyList())
     val rawMessages: StateFlow<List<MessageData>> = _rawMessages
 
@@ -51,9 +61,14 @@ class MainViewModel : ViewModel() {
     private val _isExtracting = MutableStateFlow(false)
     val isExtracting: StateFlow<Boolean> = _isExtracting
 
+    private val _isPollinationLoading = MutableStateFlow(false)
+    val isPollinationLoading: StateFlow<Boolean> = _isPollinationLoading
+
     private var loadedFileName: String? = null
 
+
     private var originalFileUri: Uri? = null
+
 
     fun loadCsv(context: Context, uri: Uri) {
         val parsed = parseCsvFile(context, uri)
@@ -394,6 +409,113 @@ class MainViewModel : ViewModel() {
         _searchMatches.value = emptyList()
         _currentMatchIndex.value = 0
         currentSearchText = ""
+    }
+
+
+    fun extractWithPollination(userPrompt: String) {
+        if (_selectedColumns.value.isEmpty()) return
+
+        _isPollinationLoading.value = true
+
+        viewModelScope.launch {
+            try {
+                // 1. Get all selected rows (or use all if none selected)
+                val selectedRows = _processedMessages.value.filterIndexed { index, _ ->
+                    _selectedRowIndices.value.contains(index)
+                }
+
+                val rowsToProcess = if (selectedRows.isEmpty()) {
+                    _processedMessages.value
+                } else {
+                    selectedRows
+                }
+
+                // Map each message to its original index *before* processing
+                val indexedRowsToProcess = rowsToProcess.mapNotNull { messageData ->
+                    val originalIndex = _processedMessages.value.indexOfFirst { it === messageData }
+                    if (originalIndex == -1) null else (originalIndex to messageData)
+                }
+
+                // 2. Launch all API calls in parallel using async
+                val deferredResults = indexedRowsToProcess.map { (originalIndex, messageData) ->
+                    async { // Launch a new coroutine for this row
+                        try {
+                            // 3. Combine selected columns into text for the prompt
+                            val dataForPrompt = _selectedColumns.value.joinToString(", ") { column ->
+                                "$column: ${messageData.data[column] ?: ""}"
+                            }
+
+                            // 4. Create the full prompt
+                            val fullPrompt = """
+                            User Prompt: "$userPrompt"
+                            Data: [$dataForPrompt]
+                            
+                            Respond ONLY with a flat, single-level JSON object.
+                            Example: {"key1": "value1", "key2": "value2"}
+                            """.trimIndent()
+
+                            // --- REFACTOR: Revert to GET and add URLEncoder ---
+                            // 5. URL-encode the prompt for the GET request
+                            // This is required for the GET path
+                            val encodedPrompt = URLEncoder.encode(fullPrompt, "UTF-8")
+
+                            // 6. Call the API (GET version)
+                            val responseText = PollinationApiClient.api.generateText(prompt = encodedPrompt).string()
+                            // --- END REFACTOR ---
+
+
+                            // 7. Parse the JSON response
+                            val parsedJson = jsonParser.decodeFromString<Map<String, JsonElement>>(responseText)
+                            val updatedData = messageData.data.toMutableMap()
+
+                            // 8. Iterate through parsed JSON and add/update columns
+                            parsedJson.forEach { (key, jsonElement) ->
+                                val newColumnName = "AI: $key"
+                                val value = when {
+                                    jsonElement is JsonPrimitive -> jsonElement.content
+                                    else -> jsonElement.toString()
+                                }
+                                updatedData[newColumnName] = value
+                            }
+
+                            originalIndex to messageData.copy(data = updatedData)
+
+                        } catch (e: Exception) {
+                            // Fallback if AI response is not valid JSON or network fails
+                            Log.e("PollinationParse", "Failed to parse AI JSON for row $originalIndex", e)
+                            val updatedData = messageData.data.toMutableMap()
+                            val failedColumnName = "AI Prompt (Failed): ${userPrompt.take(20)}..."
+
+                            // Store the *actual error* for debugging
+                            updatedData[failedColumnName] = e.toString() // Get the full error message
+
+                            originalIndex to messageData.copy(data = updatedData)
+                        }
+                    } // end async
+                } // end map
+
+                // 9. Wait for all parallel jobs to complete
+                val results = deferredResults.awaitAll()
+
+                // 10. Apply all updates to a new list
+                val updatedMessages = _processedMessages.value.toMutableList()
+                results.forEach { (index, updatedMessage) ->
+                    if (index in updatedMessages.indices) {
+                        updatedMessages[index] = updatedMessage
+                    }
+                }
+
+                // 11. Update UI state once with all changes
+                _processedMessages.value = updatedMessages
+
+                clearRowSelection()
+
+            } catch (e: Exception) {
+                Log.e("PollinationAI", "Failed to extract with Pollination (Global)", e)
+            } finally {
+                _isPollinationLoading.value = false
+            }
+        }
     }
 
 

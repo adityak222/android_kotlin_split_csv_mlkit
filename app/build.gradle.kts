@@ -59,4 +59,12 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation ("com.google.mlkit:entity-extraction:16.0.0-beta6")
     implementation ("com.opencsv:opencsv:5.7.1")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+
+    implementation("com.squareup.okhttp3:logging-interceptor:5.0.0-alpha.11")
 }

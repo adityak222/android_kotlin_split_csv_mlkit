@@ -94,13 +94,17 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 val context = LocalContext.current
 
+                val isPollinationLoading by viewModel.isPollinationLoading.collectAsStateWithLifecycle()
 
                 val processedMessages by viewModel.processedMessages.collectAsStateWithLifecycle()
                 val selectedColumns by viewModel.selectedColumns.collectAsStateWithLifecycle()
                 val selectedRows by viewModel.selectedRowIndices
+                val isExtracting by viewModel.isExtracting.collectAsStateWithLifecycle()
                 val currentMatchIndex by viewModel.currentMatchIndex
                 val searchMatches by viewModel.searchMatches
                 val currentMatch = viewModel.currentMatch
+
+                var showPromptDialog by remember { mutableStateOf(false) }
 
                 var searchText by remember { mutableStateOf("") }
 
@@ -136,8 +140,9 @@ class MainActivity : ComponentActivity() {
                             isDeleteRowEnabled = selectedRows.isNotEmpty(),
                             isDeleteColumnEnabled = selectedColumns.isNotEmpty(),
                             isRowSelectMode = isRowSelectMode,
-                            onToggleRowSelectMode = { isRowSelectMode = !isRowSelectMode }
-
+                            onToggleRowSelectMode = { isRowSelectMode = !isRowSelectMode },
+                            isPollinationLoading = isPollinationLoading,
+                            onPollinationExtractClick = { showPromptDialog = true }
                         )
                     }
                 ) { padding ->
@@ -157,7 +162,7 @@ class MainActivity : ComponentActivity() {
                                 listState = listState,
                                 rowSelectionMode = isRowSelectMode,
                                 onHeadersReordered = viewModel::setOrderedHeaders
-                                )
+                            )
                         }
 
                         if (showSearchDrawer) {
@@ -249,6 +254,23 @@ class MainActivity : ComponentActivity() {
                             }
 
                         }
+
+                        if (showPromptDialog) {
+                            AiPromptDialog(
+                                onDismiss = { showPromptDialog = false },
+                                onSubmit = { prompt ->
+                                    showPromptDialog = false
+                                    viewModel.extractWithPollination(prompt)
+                                }
+                            )
+                        }
+
+                        if (isExtracting || isPollinationLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        }
+
                     }
                 }
             }
@@ -269,7 +291,9 @@ fun AppTopBarMenu(
     isDeleteRowEnabled: Boolean,
     isDeleteColumnEnabled: Boolean,
     isRowSelectMode: Boolean,
-    onToggleRowSelectMode: () -> Unit
+    onToggleRowSelectMode: () -> Unit,
+    isPollinationLoading: Boolean,
+    onPollinationExtractClick: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -309,12 +333,20 @@ fun AppTopBarMenu(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Extract Information") },
+                        text = { Text("Extract Information (ML Kit)") },
                         onClick = {
                             menuExpanded = false
                             onExtractClick()
                         },
                         enabled = !isRowSelectMode
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Extract with AI Prompt") },
+                        onClick = {
+                            menuExpanded = false
+                            onPollinationExtractClick()
+                        },
+                        enabled = !isRowSelectMode && !isPollinationLoading // Disable if loading
                     )
                     DropdownMenuItem(
                         text = { Text("Save File") },
@@ -596,6 +628,47 @@ fun EntityExtractTable(
             }
         }
     }
+}
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AiPromptDialog(
+    onDismiss: () -> Unit,
+    onSubmit: (prompt: String) -> Unit
+) {
+    var promptText by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Extract with AI Prompt") },
+        text = {
+            OutlinedTextField(
+                value = promptText,
+                onValueChange = { promptText = it },
+                label = { Text("Enter your prompt") },
+                placeholder = { Text("e.g., 'Summarize this'") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (promptText.isNotBlank()) {
+                        onSubmit(promptText)
+                    }
+                },
+                enabled = promptText.isNotBlank()
+            ) {
+                Text("Submit")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 
